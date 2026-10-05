@@ -30,6 +30,7 @@ import io.opentelemetry.semconv.incubating.HostIncubatingAttributes;
 import io.opentelemetry.semconv.incubating.OsIncubatingAttributes;
 import io.opentelemetry.semconv.incubating.ProcessIncubatingAttributes;
 
+import java.util.List;
 import java.util.Set;
 
 import static com.google.common.base.StandardSystemProperty.JAVA_VM_NAME;
@@ -77,18 +78,25 @@ public class OpenTelemetryModule
             Set<LogRecordProcessor> logRecordProcessors,
             SdkTracerProvider tracerProvider,
             SdkMeterProvider meterProvider,
-            SdkLoggerProvider loggerProvider)
+            SdkLoggerProvider loggerProvider,
+            OpenTelemetryConfig config)
     {
         if (spanProcessors.isEmpty() && metricReaders.isEmpty() && logRecordProcessors.isEmpty()) {
             return OpenTelemetry.noop();
         }
 
-        return OpenTelemetrySdk.builder()
+        OpenTelemetrySdk openTelemetry = OpenTelemetrySdk.builder()
                 .setTracerProvider(tracerProvider)
                 .setMeterProvider(meterProvider)
                 .setLoggerProvider(loggerProvider)
                 .setPropagators(ContextPropagators.create(W3CTraceContextPropagator.getInstance()))
                 .build();
+
+        List<SpanFilterRule> spanFilterRules = SpanFilterRule.parseAll(config.getSpanFilterDrop());
+        if (spanFilterRules.isEmpty()) {
+            return openTelemetry;
+        }
+        return new FilteringOpenTelemetry(openTelemetry, new FilteringTracerProvider(tracerProvider, spanFilterRules));
     }
 
     @Provides
@@ -125,12 +133,16 @@ public class OpenTelemetryModule
 
     @Provides
     @Singleton
-    public Tracer createTracer(Set<SpanProcessor> spanProcessors, SdkTracerProvider tracerProvider)
+    public Tracer createTracer(Set<SpanProcessor> spanProcessors, SdkTracerProvider tracerProvider, OpenTelemetryConfig config)
     {
         if (spanProcessors.isEmpty()) {
             return TracerProvider.noop().get("noop");
         }
-        return tracerProvider.get(serviceName);
+        List<SpanFilterRule> spanFilterRules = SpanFilterRule.parseAll(config.getSpanFilterDrop());
+        if (spanFilterRules.isEmpty()) {
+            return tracerProvider.get(serviceName);
+        }
+        return new FilteringTracerProvider(tracerProvider, spanFilterRules).get(serviceName);
     }
 
     @Provides
